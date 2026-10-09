@@ -1,0 +1,9 @@
+node_modules/
+# Résultats des passages et registre des dépenses : propres à votre assistant, jamais publiés.
+resultats/
+.banc/
+# Votre configuration réelle (l'exemple est dans exemples/).
+banc.config.json
+.env
+# Vos copies locales de la configuration de démonstration (ports changés, par exemple).
+exemples/*.local.json

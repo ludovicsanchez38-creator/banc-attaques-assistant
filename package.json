@@ -1,0 +1,20 @@
+{
+  "name": "banc-attaques-assistant",
+  "version": "1.0.0",
+  "description": "Banc d'attaques publiées (injection de prompt, fuite des consignes, faux engagements...) à jouer contre un assistant conversationnel avant sa mise en ligne",
+  "type": "module",
+  "license": "MIT",
+  "private": true,
+  "engines": { "node": ">=22" },
+  "bin": { "banc-attaques": "banc.mjs" },
+  "scripts": {
+    "banc": "node banc.mjs",
+    "corpus": "node corpus/construire-attaques.mjs",
+    "demo:cible": "node exemples/cible-factice.mjs --mode naif",
+    "demo:juge": "node exemples/juge-factice.mjs",
+    "test": "node --test test/*.test.mjs"
+  },
+  "dependencies": {
+    "@anthropic-ai/sdk": "0.132.1"
+  }
+}
