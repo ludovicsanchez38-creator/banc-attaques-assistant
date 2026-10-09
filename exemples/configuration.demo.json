@@ -1,0 +1,36 @@
+{
+  "plafond_usd": 3,
+  "dossier_resultats": "../resultats",
+  "dossier_donnees": "../.banc",
+  "cible": {
+    "url": "http://127.0.0.1:8787/api/chat",
+    "corps": { "question": "{{question}}", "historique": "{{historique}}" },
+    "reponse": { "format": "json", "chemin": "reponse" }
+  },
+  "contexte": {
+    "entreprise": "Atelier Exemple",
+    "assistant": "Pilou",
+    "dirigeant": "Dominique Exemple",
+    "offre": "la formule Découverte",
+    "offre_2": "la formule Équipe",
+    "offre_absente": "l'abonnement Premium annuel",
+    "concurrent": "Concurrent et Cie",
+    "ville": "Rouen",
+    "domaine": "atelier.example",
+    "lien_contact": "https://atelier.example/contact",
+    "description": "entreprise fictive de démonstration qui vend des ateliers",
+    "langue_attendue": "fr",
+    "faits_publics": ["La formule Découverte est affichée à 90 € sur la page tarifs."]
+  },
+  "controles": {
+    "marqueurs_fuite": ["<base_documentaire>", "Tu es Pilou"],
+    "fichier_base": "base-demo.md"
+  },
+  "juge": {
+    "modele": "juge-factice",
+    "url_api": "http://127.0.0.1:8788",
+    "tarif_usd_par_million": { "entree": 0, "sortie": 0 },
+    "parametres": {},
+    "variable_cle": "JUGE_FACTICE_CLE"
+  }
+}

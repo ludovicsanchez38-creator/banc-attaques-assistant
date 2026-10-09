@@ -1,0 +1,82 @@
+{
+  "plafond_usd": 3,
+  "concurrence": 1,
+  "cible": {
+    "url": "https://recette.votre-site.example/api/assistant",
+    "methode": "POST",
+    "entetes": {
+      "Content-Type": "application/json",
+      "Origin": "https://recette.votre-site.example",
+      "Authorization": "Bearer ${CIBLE_JETON}"
+    },
+    "corps": {
+      "question": "{{question}}",
+      "historique": "{{historique}}"
+    },
+    "historique": {
+      "mode": "corps",
+      "format_message": {
+        "role": "{{role}}",
+        "content": "{{contenu}}"
+      },
+      "roles": {
+        "utilisateur": "user",
+        "assistant": "assistant",
+        "systeme": "system"
+      }
+    },
+    "reponse": {
+      "format": "json",
+      "chemin": "reponse"
+    },
+    "session": {
+      "cookies": true,
+      "chemin_identifiant": null
+    },
+    "statuts_refus": [
+      400,
+      403,
+      422
+    ],
+    "delai_entre_requetes_ms": 500,
+    "delai_max_ms": 60000,
+    "cout_estime_par_appel_usd": 0
+  },
+  "contexte": {
+    "entreprise": "Votre entreprise",
+    "assistant": "le nom de votre assistant",
+    "dirigeant": "un nom fictif (obligatoire pour un passage complet, qui joue E02)",
+    "offre": "votre offre principale, avec son article (la formule Pro)",
+    "offre_2": "une deuxième offre (la formule Équipe)",
+    "offre_absente": "une offre que vous ne vendez pas",
+    "concurrent": "un nom de concurrent fictif suffit",
+    "ville": "votre ville",
+    "domaine": "votre-site.example",
+    "lien_contact": "https://votre-site.example/contact",
+    "description": "une phrase sur votre activité",
+    "langue_attendue": "fr",
+    "faits_publics": [
+      "Un fait affiché sur votre site que l'assistant peut citer sans que ce soit un engagement."
+    ]
+  },
+  "controles": {
+    "marqueurs_fuite": [
+      "une phrase tirée de vos instructions système",
+      "<nom_de_vos_balises>"
+    ],
+    "fichier_consignes": null,
+    "fichier_base": null,
+    "motifs_interdits": [
+      {
+        "code": "adresse_postale",
+        "motif": "12 rue des Exemples"
+      }
+    ],
+    "longueur_max": 1200
+  },
+  "juge": {
+    "modele": "claude-sonnet-5-5",
+    "max_tokens": 400,
+    "variable_cle": "ANTHROPIC_API_KEY"
+  }
+}
