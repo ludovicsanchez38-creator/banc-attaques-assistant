@@ -109,10 +109,16 @@ const formesSecretes = (config, env) => {
 const erreurSecret = (touches, dossier) =>
   Object.assign(new Error(`secret ou motif de clé trouvé dans ${touches.join(', ')} (dossier ${dossier}) : mettez tout ce dossier à l'écart avant tout partage`), { code: 'SECRET' });
 
-/** Contrôle des secrets après une interruption : le banc ne peut plus échouer, il prévient. */
+/**
+ * Contrôle des secrets après une interruption : le banc ne peut plus échouer, il prévient, à l'écran
+ * et dans le dossier (ALERTE-SECRET.txt), car l'écran peut avoir disparu (terminal fermé).
+ */
 function balayerApresInterruption(dossier, config, env) {
   const touches = balayer(dossier, formesSecretes(config, env));
-  if (touches.length) process.stderr.write(`\nATTENTION : ${erreurSecret(touches, dossier).message}\n`);
+  if (!touches.length) return;
+  const message = erreurSecret(touches, dossier).message;
+  ecrire(dossier, 'ALERTE-SECRET.txt', `${message}\n`);
+  process.stderr.write(`\nATTENTION : ${message}\n`);
 }
 
 /** Crée le dossier du passage ; si le nom existe déjà (même seconde, même passe), ajoute un suffixe. */
@@ -228,7 +234,12 @@ export async function executerPassage(config, opts, deps = {}) {
 
     verdicts(lignes, config, ctx);
     ecrire(dossier, 'resultats.jsonl', jsonl(lignes)); // remis dans l'ordre du corpus
-    const arretJuge = await phaseJuge(lignes, j, registre, log, { apresVerdict: () => ecrire(dossier, 'resultats.jsonl', jsonl(lignes)) });
+    const arretJuge = await phaseJuge(lignes, j, registre, log, {
+      apresVerdict: () => {
+        verdicts(lignes, config, ctx); // le champ verdict suit chaque avis du juge
+        ecrire(dossier, 'resultats.jsonl', jsonl(lignes));
+      },
+    });
     verdicts(lignes, config, ctx);
     const resume = resumer(lignes, {
       ...meta,
@@ -282,7 +293,16 @@ export async function rejugerPassage(config, dossier, deps = {}) {
     verifierReste(j, registre, true);
     // Les contrôles automatiques sont refaits aussi : la configuration a pu changer.
     for (const l of lignes) l.drapeaux = l.echanges.flatMap((e, i) => controler(e.reponse, ctx).map((d) => ({ ...d, tour: i + 1 })));
-    const ecrireEnCours = () => ecrire(dossier, 'resultats-rejuges.jsonl', jsonl(lignes));
+    // Un rejugement repart de zéro et se marque provisoire dès le départ : interrompu, il ne laisse
+    // ni verdicts de l'ancienne grille ni rapport précédent présenté comme le dernier.
+    for (const l of lignes) l.juge = null;
+    verdicts(lignes, config, ctx);
+    ecrire(dossier, 'resume-rejuge.json', JSON.stringify({ passe: `${ancien.passe} (rejugé)`, provisoire: 'rejugement en cours ou interrompu : relancez-le pour obtenir un rapport' }, null, 2) + '\n');
+    ecrire(dossier, 'rapport-rejuge.md', '# Rejugement en cours ou interrompu\n\nCe rejugement n\'est pas allé au bout : relancez `--rejuger` pour obtenir un rapport.\n');
+    const ecrireEnCours = () => {
+      verdicts(lignes, config, ctx);
+      ecrire(dossier, 'resultats-rejuges.jsonl', jsonl(lignes));
+    };
     rejugementEnCours = () => {
       ecrireEnCours();
       balayerApresInterruption(dossier, config, env);

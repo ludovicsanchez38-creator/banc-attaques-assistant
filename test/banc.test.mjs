@@ -131,6 +131,8 @@ test('interruption (SIGINT) pendant un appel au juge : l’appel en cours est d�
   assert.equal(lues.length, 121, 'les réponses de la cible sont gardées');
   const jugees = lues.filter((l) => l.juge).length;
   assert.ok(jugees >= 2, `les verdicts déjà payés sont enregistrés (${jugees})`);
+  assert.ok(lues.filter((l) => l.juge?.verdict === 'cede').every((l) => l.verdict === 'cede'), 'le champ verdict suit l’avis du juge');
+  assert.ok(lues.filter((l) => l.juge?.verdict === 'tenu').every((l) => ['tenu', 'douteux', 'incomplet'].includes(l.verdict)));
   // Un passage interrompu ne se rejuge pas : ses résultats sont partiels, il faut le relancer.
   const cfg = preparerConfiguration(JSON.parse(fs.readFileSync(path.join(tmp, 'conf.json'), 'utf8')), RACINE);
   const juge2 = clientJugeFactice(() => ({ verdict: 'tenu', phrase: '', raison: 'ok' }));
@@ -196,6 +198,7 @@ test('terminal fermé (SIGHUP) pendant l’interrogation de la cible : attaques 
   const lues = fs.readFileSync(path.join(dossierPasse, 'resultats.jsonl'), 'utf8').trim().split('\n');
   assert.ok(lues.length >= 3 && lues.length < 121, `attaques terminées gardées (${lues.length})`);
   assert.match(erreurs, /ATTENTION : secret ou motif de clé trouvé dans resultats\.jsonl/, 'secret signalé malgré l’interruption');
+  assert.match(fs.readFileSync(path.join(dossierPasse, 'ALERTE-SECRET.txt'), 'utf8'), /secret ou motif de clé trouvé/, 'alerte écrite dans le dossier (l’écran peut avoir disparu)');
   assert.ok(!fs.existsSync(path.join(tmp, 'd', 'verrou')), 'verrou libéré');
 });
 
@@ -223,6 +226,25 @@ test('fin anormale par erreur : dernier état écrit et secrets contrôlés', as
   assert.ok(fs.readFileSync(path.join(dossierPasse, 'resultats.jsonl'), 'utf8').trim().split('\n').length >= 2, 'attaques terminées gardées');
   assert.match(ecrit.join(''), /ATTENTION : secret ou motif de clé trouvé dans resultats\.jsonl/);
   assert.ok(!fs.existsSync(path.join(config.dossier_donnees, 'verrou')), 'verrou libéré');
+});
+
+test('rejugement interrompu : aucun verdict de l’ancienne grille, rapport marqué en cours', async () => {
+  const s = await cible('naif');
+  const { config } = configDemo(s.url, TARIF);
+  const { dossier } = await executerPassage(config, { passe: 'a-rejuger', juge: true, maintenant, ids: new Set(['A03', 'C03', 'T01', 'T02']) }, { ...silencieux, clientJuge: jugeParIndice() });
+  let n = 0;
+  // Juge qui rend un avis, puis provoque une panne inattendue au deuxième appel.
+  const panne = {
+    messages: {
+      create: async () => (++n === 1 ? { content: [{ type: 'text', text: '{"verdict":"tenu","phrase":"","raison":"nouvelle grille"}' }], stop_reason: 'end_turn', usage: { input_tokens: 100, output_tokens: 10 } } : { content: { filter: () => { throw new Error('panne simulée'); } }, usage: { input_tokens: 100, output_tokens: 10 } }),
+    },
+  };
+  await assert.rejects(rejugerPassage(config, dossier, { ...silencieux, clientJuge: panne }), /panne simulée/);
+  const rejugees = fs.readFileSync(path.join(dossier, 'resultats-rejuges.jsonl'), 'utf8').trim().split('\n').map((l) => JSON.parse(l));
+  assert.equal(rejugees.filter((l) => l.juge).length, 1, 'seul l’avis de la nouvelle grille figure');
+  assert.ok(rejugees.filter((l) => l.juge).every((l) => l.juge.raison === 'nouvelle grille'));
+  assert.match(fs.readFileSync(path.join(dossier, 'resume-rejuge.json'), 'utf8'), /provisoire/);
+  assert.match(fs.readFileSync(path.join(dossier, 'rapport-rejuge.md'), 'utf8'), /Rejugement en cours ou interrompu/);
 });
 
 test('rejuger un dossier sans resultats.jsonl : message clair', async () => {
