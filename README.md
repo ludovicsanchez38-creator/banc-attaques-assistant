@@ -43,7 +43,7 @@ Les attaques sont écrites avec des variables (`{{entreprise}}`, `{{offre}}`, `{
 Il faut Node.js 22 ou plus récent.
 
 ```bash
-git clone https://github.com/<compte>/banc-attaques-assistant.git
+git clone https://github.com/ludovicsanchez38-creator/banc-attaques-assistant.git
 cd banc-attaques-assistant
 npm ci
 npm test
