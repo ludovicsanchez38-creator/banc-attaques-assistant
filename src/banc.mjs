@@ -52,19 +52,22 @@ const servie = (l) => l.echanges.some((e) => e.statut_http >= 200 && e.statut_ht
  * plafond n'est pas jugée (les suivantes, moins chères, peuvent l'être). Le juge s'arrête sur une
  * erreur de clé, de facturation ou de connexion, et après trois appels de suite sans réponse.
  */
-async function phaseJuge(lignes, j, registre, log, { apresVerdict = () => {}, secrets = [], dossier } = {}) {
-  // Contrôler les réponses brutes avant le premier envoi, même au-delà de la troncature du juge.
-  if (j && lignes.some((l) => l.echanges.some((e) => contientSecret(e.reponse || '', secrets)))) {
-    throw erreurSecret(['resultats.jsonl'], dossier);
-  }
+async function phaseJuge(lignes, j, registre, log, { apresVerdict = () => {}, secrets = [] } = {}) {
   let arret = null;
   let reussis = 0;
   let echecsDeSuite = 0;
+  let secretes = 0;
   const nonJugees = [];
   const crochets = { peut: registre.peut, reserver: (m) => registre.ajouterJuge(m), ajuster: (d) => registre.ajouterJuge(d) };
   for (const l of lignes) {
     l.juge = null; // un rejugement repart toujours de zéro : jamais de mélange de grilles
     if (!j || arret || l.non_applicable || !servie(l)) continue;
+    // Écarter toute l'attaque avant la troncature, puis clore le passage : le balayage final
+    // signalera le secret sans rendre provisoires les réponses déjà reçues de la cible.
+    if (l.echanges.some((e) => contientSecret(e.reponse || '', secrets))) {
+      secretes++;
+      continue;
+    }
     const att = attaqueDe(l);
     const majorant = coutMaximal(j.systeme, contenuJuge(att, l.echanges), j.juge, j.tarif);
     if (!registre.peut(majorant)) {
@@ -87,6 +90,11 @@ async function phaseJuge(lignes, j, registre, log, { apresVerdict = () => {}, se
       arret = e.message;
       log(`${arret}\n`);
     }
+  }
+  if (secretes) {
+    const note = `secret ou motif de clé : ${secretes} ${secretes > 1 ? 'attaques non jugées' : 'attaque non jugée'}`;
+    log(`${note}\n`);
+    arret = arret ? `${arret} ; ${note}` : note;
   }
   if (nonJugees.length) {
     const note = `plafond de dépense proche : ${nonJugees.length} ${nonJugees.length > 1 ? 'attaques non jugées' : 'attaque non jugée'} (${nonJugees.slice(0, 8).join(', ')}${nonJugees.length > 8 ? '...' : ''})`;
@@ -239,7 +247,7 @@ export async function executerPassage(config, opts, deps = {}) {
     verdicts(lignes, config, ctx);
     ecrire(dossier, 'resultats.jsonl', jsonl(lignes)); // remis dans l'ordre du corpus
     const arretJuge = await phaseJuge(lignes, j, registre, log, {
-      secrets: formesSecretes(config, env), dossier,
+      secrets: formesSecretes(config, env),
       apresVerdict: () => {
         verdicts(lignes, config, ctx); // le champ verdict suit chaque avis du juge
         ecrire(dossier, 'resultats.jsonl', jsonl(lignes));
@@ -313,7 +321,7 @@ export async function rejugerPassage(config, dossier, deps = {}) {
       balayerApresInterruption(dossier, config, env);
     };
     registre.avantSortie = rejugementEnCours;
-    const arretJuge = await phaseJuge(lignes, j, registre, log, { apresVerdict: ecrireEnCours, secrets: formesSecretes(config, env), dossier });
+    const arretJuge = await phaseJuge(lignes, j, registre, log, { apresVerdict: ecrireEnCours, secrets: formesSecretes(config, env) });
     verdicts(lignes, config, ctx);
     const maintenant = maintenantRejuge;
     const resume = resumer(lignes, {
