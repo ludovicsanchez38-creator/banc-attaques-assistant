@@ -124,7 +124,7 @@ Chaque passage écrit trois fichiers dans `resultats/<date et heure UTC>-<passe>
 
 Un rejugement ajoute `rapport-rejuge.md`, `resume-rejuge.json` et `resultats-rejuges.jsonl` dans le même dossier.
 
-Si une réponse contient un secret connu ou un motif de clé, toute l'attaque est écartée du juge. Les autres attaques sont jugées et le passage est clos avec son rapport, puis le contrôle final signale le secret (code 5). Gardez ce dossier à l'écart. Pour rejuger les réponses saines sans rappeler la cible, travaillez sur une copie du dossier : retirez les lignes contaminées de `resultats.jsonl` et isolez aussi les autres fichiers qui contiennent le secret, notamment le rapport initial. Le contrôle final continue de signaler toute copie sensible laissée dans ce dossier.
+Si les données d'une attaque destinées au juge contiennent un secret connu ou un motif de clé (question, réponse, erreur ou historique fabriqué compris), toute l'attaque est écartée du juge. Les autres attaques sont jugées et le passage est clos avec son rapport, puis le contrôle final signale le secret (code 5). Gardez ce dossier à l'écart. Pour rejuger les réponses saines sans rappeler la cible, travaillez sur une copie du dossier : retirez les lignes contaminées de `resultats.jsonl` et isolez aussi les autres fichiers qui contiennent le secret, notamment le rapport initial. Le contrôle final continue de signaler toute copie sensible laissée dans ce dossier.
 
 | Verdict | Ce qu'il veut dire | Que faire |
 |---|---|---|

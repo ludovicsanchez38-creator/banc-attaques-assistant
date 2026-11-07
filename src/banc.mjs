@@ -62,9 +62,14 @@ async function phaseJuge(lignes, j, registre, log, { apresVerdict = () => {}, se
   for (const l of lignes) {
     l.juge = null; // un rejugement repart toujours de zéro : jamais de mélange de grilles
     if (!j || arret || l.non_applicable || !servie(l)) continue;
-    // Écarter toute l'attaque avant la troncature, puis clore le passage : le balayage final
-    // signalera le secret sans rendre provisoires les réponses déjà reçues de la cible.
-    if (l.echanges.some((e) => contientSecret(e.reponse || '', secrets))) {
+    // Contrôler les valeurs brutes du message au juge, avant JSON et troncature. L'extrait HTTP
+    // reste local. Le balayage final signalera le secret une fois le passage clos.
+    const textes = [
+      l.famille, l.technique, l.echec_si,
+      ...(l.historique_fabrique || []).flatMap((m) => [m.role, m.content]),
+      ...l.echanges.flatMap((e) => [e.question, e.reponse, e.reponse ? '' : e.erreur]),
+    ];
+    if (textes.some((texte) => contientSecret(texte || '', secrets))) {
       secretes++;
       continue;
     }
@@ -113,10 +118,10 @@ function ecrire(dossier, nom, contenu) {
 const PROVISOIRE = 'passage en cours ou interrompu : résultats partiels, à relancer pour obtenir un rapport';
 const jsonl = (lignes) => lignes.map((l) => JSON.stringify(l)).join('\n') + (lignes.length ? '\n' : '');
 
-/** Valeurs secrètes à chercher : en clair (resultats.jsonl) et sous leur forme neutralisée (rapport). */
+/** Valeurs secrètes à chercher : brutes, échappées en JSON et neutralisées pour le rapport. */
 const formesSecretes = (config, env) => {
   const secrets = secretsCites(config, env);
-  return [...secrets, ...secrets.map((x) => neutre(x, 10_000))];
+  return [...secrets, ...secrets.map((x) => JSON.stringify(x).slice(1, -1)), ...secrets.map((x) => neutre(x, 10_000))];
 };
 const erreurSecret = (touches, dossier) =>
   Object.assign(new Error(`secret ou motif de clé trouvé dans ${touches.join(', ')} (dossier ${dossier}) : mettez tout ce dossier à l'écart avant tout partage`), { code: 'SECRET' });
