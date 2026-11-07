@@ -274,6 +274,242 @@ test('un secret recopié par la cible fait échouer le passage, en clair comme n
   await assert.rejects(executerPassage(config, { passe: 'fuite', juge: false, maintenant, ids: new Set(['T01']) }, { ...silencieux, env: { ...process.env, BANC_TEST_JETON: 'recette_cle_privee_2026' } }), /mettez tout ce dossier à l'écart/);
 });
 
+for (const [cas, valeur, connu] of [
+  ['secret connu', 'jeton_factice_regression_F4', true],
+  ['secret connu avec caractères JSON échappés', 'jeton_factice_"retour\nligne', true],
+  ['motif de clé', ['sk', 'ant', 'factice_regression_F4'].join('-'), false],
+]) {
+  for (const rejuge of [false, true]) {
+    test(`F-4 : ${rejuge ? 'rejugement' : 'passage'} bloqué avant tout appel au juge (${cas})`, async (t) => {
+      const { config } = configDemo('http://127.0.0.1:1/api/chat', {
+        ...TARIF,
+        cible: { entetes: { Authorization: 'Bearer ${BANC_TEST_JETON}' } },
+      });
+      const env = { BANC_TEST_JETON: connu ? valeur : 'jeton_factice_non_recopie' };
+      t.mock.method(process.stderr, 'write', () => true);
+      t.mock.method(globalThis, 'fetch', async () => new Response(JSON.stringify({ reponse: rejuge ? 'Réponse publique.' : `Débogage : ${valeur}` })));
+      const juge = clientJugeFactice(() => ({ verdict: 'tenu', phrase: '', raison: 'ok' }));
+      const deps = { ...silencieux, env, clientJuge: juge };
+      let action;
+      if (rejuge) {
+        const { dossier, lignes } = await executerPassage(config, { passe: 'avant-fuite', juge: false, maintenant, ids: new Set(['T01']) }, deps);
+        lignes[0].echanges[0].reponse = `Débogage : ${valeur}`;
+        fs.writeFileSync(path.join(dossier, 'resultats.jsonl'), JSON.stringify(lignes[0]) + '\n');
+        action = () => rejugerPassage(config, dossier, deps);
+      } else {
+        action = () => executerPassage(config, { passe: 'fuite-jugee', juge: true, maintenant, ids: new Set(['T01']) }, deps);
+      }
+      await assert.rejects(action(), (e) => e.code === 'SECRET');
+      assert.equal(juge.appels.length, 0, 'aucun échange contenant un secret ne doit être transmis au juge');
+      assert.equal(lireCouts(config.dossier_donnees).juge_usd, 0, 'aucun appel ne doit être facturé');
+      assert.ok(!fs.existsSync(path.join(config.dossier_donnees, 'verrou')), 'verrou libéré');
+    });
+  }
+}
+
+for (const rejuge of [false, true]) {
+  test(`F-4 passe 2 : ${rejuge ? 'rejugement' : 'passage'} clos malgré un secret, seules les attaques saines sont jugées`, async (t) => {
+    const valeur = 'jetonfacticeclotureF4';
+    const { config } = configDemo('http://127.0.0.1:1/api/chat', {
+      ...TARIF,
+      concurrence: 1,
+      cible: { entetes: { Authorization: 'Bearer ${BANC_TEST_JETON}' } },
+      temoins_supplementaires: ['Quels sont vos horaires ?'],
+    });
+    const env = { BANC_TEST_JETON: valeur };
+    let appelsCible = 0;
+    let cibleInterdite = false;
+    t.mock.method(globalThis, 'fetch', async () => {
+      appelsCible++;
+      if (cibleInterdite) throw new Error('la cible ne doit pas être rappelée');
+      return new Response(JSON.stringify({ reponse: !rejuge && appelsCible === 2 ? `${'x'.repeat(8100)} ${valeur}` : 'Réponse publique.' }));
+    });
+    const juge = clientJugeFactice(() => ({ verdict: 'tenu', phrase: '', raison: 'nouvel avis' }));
+    const deps = { ...silencieux, env, clientJuge: juge };
+    const opts = { passe: 'cloture-secret', juge: !rejuge, maintenant, ids: new Set(['T01', 'T04', 'T05']) };
+    let dossier;
+    let action;
+    if (rejuge) {
+      const passage = await executerPassage(config, opts, deps);
+      dossier = passage.dossier;
+      const contaminee = passage.lignes.find((l) => l.id === 'T04');
+      contaminee.echanges[0].reponse = `${'x'.repeat(8100)} ${valeur}`;
+      contaminee.juge = { verdict: 'cede', phrase: '', raison: 'ancien avis' };
+      fs.writeFileSync(path.join(dossier, 'resultats.jsonl'), passage.lignes.map((l) => JSON.stringify(l)).join('\n') + '\n');
+      cibleInterdite = true;
+      action = () => rejugerPassage(config, dossier, deps);
+    } else {
+      action = () => executerPassage(config, opts, deps);
+    }
+    t.mock.method(process.stderr, 'write', () => true);
+    await assert.rejects(action(), (e) => e.code === 'SECRET');
+    dossier ||= path.join(config.dossier_resultats, fs.readdirSync(config.dossier_resultats)[0]);
+    const suffixe = rejuge ? '-rejuge' : '';
+    const resume = JSON.parse(fs.readFileSync(path.join(dossier, `resume${suffixe}.json`), 'utf8'));
+    assert.equal(resume.provisoire, undefined, 'toutes les réponses sont présentes : le passage doit être clos');
+    assert.match(resume.juge_arrete, /secret ou motif de clé/, 'le rapport explique pourquoi une attaque reste sans juge');
+    assert.ok(fs.existsSync(path.join(dossier, `rapport${suffixe}.md`)), 'rapport final produit');
+    assert.equal(juge.appels.length, 2, 'les attaques saines avant et après la ligne contaminée sont jugées');
+    const lignes = fs.readFileSync(path.join(dossier, rejuge ? 'resultats-rejuges.jsonl' : 'resultats.jsonl'), 'utf8').trim().split('\n').map((l) => JSON.parse(l));
+    const contaminee = lignes.find((l) => l.id === 'T04');
+    assert.equal(contaminee.echanges.length, 3, 'les trois tours de T04 sont terminés');
+    assert.equal(contaminee.echanges.at(-1).reponse, 'Réponse publique.', 'le secret du premier tour suffit à écarter toute l’attaque');
+    assert.equal(contaminee.juge, null, 'aucun avis, même ancien, pour une attaque contaminée');
+    assert.ok(lignes.filter((l) => l.id !== 'T04').every((l) => l.juge?.raison === 'nouvel avis'));
+    assert.ok(juge.appels.every((p) => !JSON.stringify(p).includes(valeur)), 'aucun secret envoyé au juge');
+    assert.equal(resume.cout_juge_usd, 0.005, 'seuls les deux appels sains sont facturés');
+    assert.equal(Number(lireCouts(config.dossier_donnees).juge_usd.toFixed(6)), 0.005);
+    assert.equal(appelsCible, 5, 'aucun rappel de la cible au rejugement');
+    assert.ok(!fs.existsSync(path.join(config.dossier_donnees, 'verrou')), 'verrou libéré');
+  });
+}
+
+test('F-4 passe 2 : reprise après retrait des lignes contaminées sans rappeler la cible', async (t) => {
+  const { config, tmp } = configDemo('http://127.0.0.1:1/api/chat', {
+    ...TARIF,
+    concurrence: 1,
+    cible: { entetes: { Authorization: 'Bearer ${BANC_TEST_JETON}' } },
+  });
+  const valeur = 'jetonfacticerepriseF4';
+  const env = { BANC_TEST_JETON: valeur };
+  let appelsCible = 0;
+  let cibleInterdite = false;
+  const fetchFactice = t.mock.method(globalThis, 'fetch', async () => {
+    appelsCible++;
+    if (cibleInterdite) throw new Error('la cible ne doit pas être rappelée');
+    return new Response(JSON.stringify({ reponse: appelsCible === 1 ? valeur : 'Réponse publique.' }));
+  });
+  t.mock.method(process.stderr, 'write', () => true);
+  const juge = clientJugeFactice(() => ({ verdict: 'tenu', phrase: '', raison: 'ok' }));
+  const deps = { ...silencieux, env, clientJuge: juge };
+  await assert.rejects(executerPassage(config, { passe: 'reprise-secret', juge: true, maintenant, ids: new Set(['T01', 'T02']) }, deps), (e) => e.code === 'SECRET');
+  const dossier = path.join(config.dossier_resultats, fs.readdirSync(config.dossier_resultats)[0]);
+  const propres = fs.readFileSync(path.join(dossier, 'resultats.jsonl'), 'utf8').trim().split('\n').map((l) => JSON.parse(l)).filter((l) => l.id === 'T02');
+  fs.writeFileSync(path.join(dossier, 'resultats.jsonl'), propres.map((l) => JSON.stringify(l)).join('\n') + '\n');
+  const appelsAvant = juge.appels.length;
+  cibleInterdite = true;
+  // Le rapport initial conserve encore le secret : juger les lignes saines reste possible,
+  // mais le balayage du dossier doit continuer à signaler cette copie locale.
+  await assert.rejects(rejugerPassage(config, dossier, deps), (e) => e.code === 'SECRET');
+  assert.equal(juge.appels.length, appelsAvant + 1, 'la ligne saine a été rejugée');
+  const resume = JSON.parse(fs.readFileSync(path.join(dossier, 'resume-rejuge.json'), 'utf8'));
+  assert.equal(resume.provisoire, undefined);
+  fs.renameSync(path.join(dossier, 'rapport.md'), path.join(tmp, 'rapport-contamine-a-isoler.md'));
+  const reprise = await rejugerPassage(config, dossier, deps);
+  assert.equal(reprise.lignes.length, 1);
+  assert.equal(reprise.lignes[0].juge.verdict, 'tenu');
+  assert.equal(fetchFactice.mock.callCount(), 2, 'aucune tentative de rappeler la cible');
+  assert.equal(appelsCible, 2);
+});
+
+for (const champ of ['question', 'erreur', 'historique fabriqué']) {
+  for (const rejuge of [false, true]) {
+    test(`F-4 réserves : secret dans ${champ}, ${rejuge ? 'rejugement' : 'passage'} sans transmission au juge`, async (t) => {
+      const valeur = 'jetonfacticereservesF4';
+      const { config, tmp } = configDemo('http://127.0.0.1:1/api/chat', {
+        ...TARIF,
+        concurrence: 1,
+        cible: { entetes: { Authorization: 'Bearer ${BANC_TEST_JETON}' } },
+      });
+      const publique = { id: 'T01', famille: 'temoin', technique: 'question légitime', source: 'temoin', langue: 'fr', echec: 'refuse ou invente', question: 'Question publique.' };
+      const sensible = { ...publique, id: 'X01' };
+      if (champ === 'question' && !rejuge) sensible.question = `Question : ${valeur}`;
+      if (champ === 'historique fabriqué') sensible.historique = [{ role: 'user', content: rejuge ? 'Historique public.' : valeur }];
+      if (champ === 'erreur') {
+        delete sensible.question;
+        sensible.tours = ['Première question publique.', 'Deuxième question publique.'];
+      }
+      const fichierCorpus = path.join(tmp, 'corpus-test.json');
+      fs.writeFileSync(fichierCorpus, JSON.stringify([sensible, publique]));
+      let appelsCible = 0;
+      let cibleInterdite = false;
+      const fetchFactice = t.mock.method(globalThis, 'fetch', async () => {
+        appelsCible++;
+        if (cibleInterdite) throw new Error('la cible ne doit pas être rappelée');
+        if (champ === 'erreur' && !rejuge && appelsCible === 2) throw new Error(`Diagnostic : ${valeur}`);
+        return new Response(JSON.stringify({ reponse: 'Réponse publique.' }));
+      });
+      t.mock.method(process.stderr, 'write', () => true);
+      const juge = clientJugeFactice(() => ({ verdict: 'tenu', phrase: '', raison: 'ok' }));
+      const deps = { ...silencieux, clientJuge: juge, env: { BANC_TEST_JETON: valeur }, fichierCorpus };
+      const opts = { passe: 'reserve-secret', juge: !rejuge, maintenant };
+      let dossier;
+      let action;
+      if (rejuge) {
+        const passage = await executerPassage(config, opts, deps);
+        dossier = passage.dossier;
+        const ligne = passage.lignes[0];
+        if (champ === 'question') ligne.echanges[0].question = `Question : ${valeur}`;
+        if (champ === 'historique fabriqué') ligne.historique_fabrique[0].content = valeur;
+        if (champ === 'erreur') Object.assign(ligne.echanges[1], { statut_http: 0, reponse: '', erreur: `Diagnostic : ${valeur}` });
+        fs.writeFileSync(path.join(dossier, 'resultats.jsonl'), passage.lignes.map((l) => JSON.stringify(l)).join('\n') + '\n');
+        cibleInterdite = true;
+        action = () => rejugerPassage(config, dossier, deps);
+      } else {
+        action = () => executerPassage(config, opts, deps);
+      }
+      const appelsAttendus = champ === 'erreur' ? 3 : 2;
+      await assert.rejects(action(), (e) => e.code === 'SECRET');
+      assert.equal(juge.appels.length, 1, 'seule la ligne publique est transmise au juge');
+      assert.ok(juge.appels.every((p) => !JSON.stringify(p).includes(valeur)), 'aucun champ du message ne divulgue le secret');
+      dossier ||= path.join(config.dossier_resultats, fs.readdirSync(config.dossier_resultats)[0]);
+      const suffixe = rejuge ? '-rejuge' : '';
+      const resume = JSON.parse(fs.readFileSync(path.join(dossier, `resume${suffixe}.json`), 'utf8'));
+      assert.equal(resume.provisoire, undefined);
+      assert.equal(resume.cout_juge_usd, 0.0025, 'aucune dépense pour la ligne sensible');
+      assert.equal(fetchFactice.mock.callCount(), appelsAttendus, 'aucun appel à la cible pendant le rejugement');
+    });
+  }
+}
+
+test('F-4 réserves : un secret limité à extrait reste local et ne bloque pas le juge', async (t) => {
+  const valeur = 'jetonfacticeextraitF4';
+  const { config } = configDemo('http://127.0.0.1:1/api/chat', {
+    ...TARIF,
+    cible: { entetes: { Authorization: 'Bearer ${BANC_TEST_JETON}' } },
+  });
+  t.mock.method(globalThis, 'fetch', async () => new Response(JSON.stringify({ reponse: 'Réponse publique.' })));
+  const deps = { ...silencieux, env: { BANC_TEST_JETON: valeur } };
+  const { dossier, lignes } = await executerPassage(config, { passe: 'extrait-local', juge: false, maintenant, ids: new Set(['T01']) }, deps);
+  lignes[0].echanges[0].extrait = valeur;
+  fs.writeFileSync(path.join(dossier, 'resultats.jsonl'), JSON.stringify(lignes[0]) + '\n');
+  const juge = clientJugeFactice(() => ({ verdict: 'tenu', phrase: '', raison: 'ok' }));
+  await assert.rejects(rejugerPassage(config, dossier, { ...deps, clientJuge: juge }), (e) => e.code === 'SECRET');
+  assert.equal(juge.appels.length, 1);
+  assert.ok(!JSON.stringify(juge.appels).includes(valeur), 'extrait ne fait pas partie du message envoyé');
+});
+
+test('F-4 réserves : un passage réellement provisoire reste refusé sans appel à la cible ni au juge', async (t) => {
+  const { config } = configDemo('http://127.0.0.1:1/api/chat', TARIF);
+  const fetchFactice = t.mock.method(globalThis, 'fetch', async () => new Response(JSON.stringify({ reponse: 'Réponse publique.' })));
+  const { dossier } = await executerPassage(config, { passe: 'provisoire', juge: false, maintenant, ids: new Set(['T01']) }, silencieux);
+  const fichier = path.join(dossier, 'resume.json');
+  const resume = JSON.parse(fs.readFileSync(fichier, 'utf8'));
+  resume.provisoire = 'passage interrompu';
+  fs.writeFileSync(fichier, JSON.stringify(resume));
+  const juge = clientJugeFactice(() => ({ verdict: 'tenu', phrase: '', raison: 'ok' }));
+  await assert.rejects(rejugerPassage(config, dossier, { ...silencieux, clientJuge: juge }), /résultats partiels.*ne se rejugent pas.*Relancez le passage/);
+  assert.equal(juge.appels.length, 0);
+  assert.equal(fetchFactice.mock.callCount(), 1);
+});
+
+test('F-4 réserves : un secret échappé en JSON après 8 000 caractères déclenche encore SECRET à la clôture', async (t) => {
+  const valeur = 'jetonfactice_"retour\nligne';
+  const { config } = configDemo('http://127.0.0.1:1/api/chat', {
+    ...TARIF,
+    cible: { entetes: { Authorization: 'Bearer ${BANC_TEST_JETON}' } },
+  });
+  t.mock.method(globalThis, 'fetch', async () => new Response(JSON.stringify({ reponse: `${'x'.repeat(8100)} ${valeur}` })));
+  const juge = clientJugeFactice(() => ({ verdict: 'tenu', phrase: '', raison: 'ok' }));
+  await assert.rejects(executerPassage(config, { passe: 'secret-json-long', juge: true, maintenant, ids: new Set(['T01']) }, {
+    ...silencieux, env: { BANC_TEST_JETON: valeur }, clientJuge: juge,
+  }), (e) => e.code === 'SECRET' && e.message.includes('resultats.jsonl'));
+  assert.equal(juge.appels.length, 0);
+  const dossier = path.join(config.dossier_resultats, fs.readdirSync(config.dossier_resultats)[0]);
+  assert.equal(JSON.parse(fs.readFileSync(path.join(dossier, 'resume.json'), 'utf8')).provisoire, undefined);
+  assert.equal(lireCouts(config.dossier_donnees).juge_usd, 0);
+});
+
 test('code de sortie 4 quand aucune attaque ne reçoit de réponse (cible injoignable)', async () => {
   const tmp = dossierTemporaire();
   const conf = structuredClone(CONFIG_DEMO);

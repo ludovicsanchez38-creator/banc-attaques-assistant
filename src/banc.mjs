@@ -10,7 +10,7 @@ import { tarifJuge, secretsCites, verifierEnv } from './configuration.mjs';
 import { ArretJuge, systemeJuge, contenuJuge, coutMaximal, creerClientJuge, juger } from './juge.mjs';
 import { ouvrirRegistre, ErreurPlafond } from './couts.mjs';
 import { verdictFinal, resumer, rapportMarkdown, neutre } from './rapport.mjs';
-import { balayer } from './secrets.mjs';
+import { balayer, contientSecret } from './secrets.mjs';
 
 async function enParallele(elements, n, f) {
   const out = new Array(elements.length);
@@ -52,15 +52,27 @@ const servie = (l) => l.echanges.some((e) => e.statut_http >= 200 && e.statut_ht
  * plafond n'est pas jugée (les suivantes, moins chères, peuvent l'être). Le juge s'arrête sur une
  * erreur de clé, de facturation ou de connexion, et après trois appels de suite sans réponse.
  */
-async function phaseJuge(lignes, j, registre, log, { apresVerdict = () => {} } = {}) {
+async function phaseJuge(lignes, j, registre, log, { apresVerdict = () => {}, secrets = [] } = {}) {
   let arret = null;
   let reussis = 0;
   let echecsDeSuite = 0;
+  let secretes = 0;
   const nonJugees = [];
   const crochets = { peut: registre.peut, reserver: (m) => registre.ajouterJuge(m), ajuster: (d) => registre.ajouterJuge(d) };
   for (const l of lignes) {
     l.juge = null; // un rejugement repart toujours de zéro : jamais de mélange de grilles
     if (!j || arret || l.non_applicable || !servie(l)) continue;
+    // Contrôler les valeurs brutes du message au juge, avant JSON et troncature. L'extrait HTTP
+    // reste local. Le balayage final signalera le secret une fois le passage clos.
+    const textes = [
+      l.famille, l.technique, l.echec_si,
+      ...(l.historique_fabrique || []).flatMap((m) => [m.role, m.content]),
+      ...l.echanges.flatMap((e) => [e.question, e.reponse, e.reponse ? '' : e.erreur]),
+    ];
+    if (textes.some((texte) => contientSecret(texte || '', secrets))) {
+      secretes++;
+      continue;
+    }
     const att = attaqueDe(l);
     const majorant = coutMaximal(j.systeme, contenuJuge(att, l.echanges), j.juge, j.tarif);
     if (!registre.peut(majorant)) {
@@ -84,6 +96,11 @@ async function phaseJuge(lignes, j, registre, log, { apresVerdict = () => {} } =
       log(`${arret}\n`);
     }
   }
+  if (secretes) {
+    const note = `secret ou motif de clé : ${secretes} ${secretes > 1 ? 'attaques non jugées' : 'attaque non jugée'}`;
+    log(`${note}\n`);
+    arret = arret ? `${arret} ; ${note}` : note;
+  }
   if (nonJugees.length) {
     const note = `plafond de dépense proche : ${nonJugees.length} ${nonJugees.length > 1 ? 'attaques non jugées' : 'attaque non jugée'} (${nonJugees.slice(0, 8).join(', ')}${nonJugees.length > 8 ? '...' : ''})`;
     log(`${note}\n`);
@@ -101,10 +118,10 @@ function ecrire(dossier, nom, contenu) {
 const PROVISOIRE = 'passage en cours ou interrompu : résultats partiels, à relancer pour obtenir un rapport';
 const jsonl = (lignes) => lignes.map((l) => JSON.stringify(l)).join('\n') + (lignes.length ? '\n' : '');
 
-/** Valeurs secrètes à chercher : en clair (resultats.jsonl) et sous leur forme neutralisée (rapport). */
+/** Valeurs secrètes à chercher : brutes, échappées en JSON et neutralisées pour le rapport. */
 const formesSecretes = (config, env) => {
   const secrets = secretsCites(config, env);
-  return [...secrets, ...secrets.map((x) => neutre(x, 10_000))];
+  return [...secrets, ...secrets.map((x) => JSON.stringify(x).slice(1, -1)), ...secrets.map((x) => neutre(x, 10_000))];
 };
 const erreurSecret = (touches, dossier) =>
   Object.assign(new Error(`secret ou motif de clé trouvé dans ${touches.join(', ')} (dossier ${dossier}) : mettez tout ce dossier à l'écart avant tout partage`), { code: 'SECRET' });
@@ -235,6 +252,7 @@ export async function executerPassage(config, opts, deps = {}) {
     verdicts(lignes, config, ctx);
     ecrire(dossier, 'resultats.jsonl', jsonl(lignes)); // remis dans l'ordre du corpus
     const arretJuge = await phaseJuge(lignes, j, registre, log, {
+      secrets: formesSecretes(config, env),
       apresVerdict: () => {
         verdicts(lignes, config, ctx); // le champ verdict suit chaque avis du juge
         ecrire(dossier, 'resultats.jsonl', jsonl(lignes));
@@ -308,7 +326,7 @@ export async function rejugerPassage(config, dossier, deps = {}) {
       balayerApresInterruption(dossier, config, env);
     };
     registre.avantSortie = rejugementEnCours;
-    const arretJuge = await phaseJuge(lignes, j, registre, log, { apresVerdict: ecrireEnCours });
+    const arretJuge = await phaseJuge(lignes, j, registre, log, { apresVerdict: ecrireEnCours, secrets: formesSecretes(config, env) });
     verdicts(lignes, config, ctx);
     const maintenant = maintenantRejuge;
     const resume = resumer(lignes, {
