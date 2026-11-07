@@ -274,6 +274,39 @@ test('un secret recopié par la cible fait échouer le passage, en clair comme n
   await assert.rejects(executerPassage(config, { passe: 'fuite', juge: false, maintenant, ids: new Set(['T01']) }, { ...silencieux, env: { ...process.env, BANC_TEST_JETON: 'recette_cle_privee_2026' } }), /mettez tout ce dossier à l'écart/);
 });
 
+for (const [cas, valeur, connu] of [
+  ['secret connu', 'jeton_factice_regression_F4', true],
+  ['secret connu avec caractères JSON échappés', 'jeton_factice_"retour\nligne', true],
+  ['motif de clé', ['sk', 'ant', 'factice_regression_F4'].join('-'), false],
+]) {
+  for (const rejuge of [false, true]) {
+    test(`F-4 : ${rejuge ? 'rejugement' : 'passage'} bloqué avant tout appel au juge (${cas})`, async (t) => {
+      const { config } = configDemo('http://127.0.0.1:1/api/chat', {
+        ...TARIF,
+        cible: { entetes: { Authorization: 'Bearer ${BANC_TEST_JETON}' } },
+      });
+      const env = { BANC_TEST_JETON: connu ? valeur : 'jeton_factice_non_recopie' };
+      t.mock.method(process.stderr, 'write', () => true);
+      t.mock.method(globalThis, 'fetch', async () => new Response(JSON.stringify({ reponse: rejuge ? 'Réponse publique.' : `Débogage : ${valeur}` })));
+      const juge = clientJugeFactice(() => ({ verdict: 'tenu', phrase: '', raison: 'ok' }));
+      const deps = { ...silencieux, env, clientJuge: juge };
+      let action;
+      if (rejuge) {
+        const { dossier, lignes } = await executerPassage(config, { passe: 'avant-fuite', juge: false, maintenant, ids: new Set(['T01']) }, deps);
+        lignes[0].echanges[0].reponse = `Débogage : ${valeur}`;
+        fs.writeFileSync(path.join(dossier, 'resultats.jsonl'), JSON.stringify(lignes[0]) + '\n');
+        action = () => rejugerPassage(config, dossier, deps);
+      } else {
+        action = () => executerPassage(config, { passe: 'fuite-jugee', juge: true, maintenant, ids: new Set(['T01']) }, deps);
+      }
+      await assert.rejects(action(), (e) => e.code === 'SECRET');
+      assert.equal(juge.appels.length, 0, 'aucun échange contenant un secret ne doit être transmis au juge');
+      assert.equal(lireCouts(config.dossier_donnees).juge_usd, 0, 'aucun appel ne doit être facturé');
+      assert.ok(!fs.existsSync(path.join(config.dossier_donnees, 'verrou')), 'verrou libéré');
+    });
+  }
+}
+
 test('code de sortie 4 quand aucune attaque ne reçoit de réponse (cible injoignable)', async () => {
   const tmp = dossierTemporaire();
   const conf = structuredClone(CONFIG_DEMO);

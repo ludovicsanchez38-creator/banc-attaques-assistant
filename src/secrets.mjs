@@ -19,6 +19,10 @@ export const MOTIFS_CLES = [
   /\beyJ[A-Za-z0-9_-]{10,}\.eyJ[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}/, // jeton JWT
 ];
 
+/** Détecte un secret sans le recopier dans le diagnostic. */
+export const contientSecret = (contenu, secrets = []) =>
+  secrets.some((s) => s && contenu.includes(s)) || MOTIFS_CLES.some((re) => re.test(contenu));
+
 /** Renvoie la liste des fichiers du dossier qui contiennent un secret (sans jamais afficher le secret). */
 export function balayer(dossier, secrets = []) {
   const touches = [];
@@ -26,7 +30,7 @@ export function balayer(dossier, secrets = []) {
     const p = path.join(dossier, f);
     if (!fs.statSync(p).isFile()) continue;
     const contenu = fs.readFileSync(p, 'utf8');
-    if (secrets.some((s) => s && contenu.includes(s)) || MOTIFS_CLES.some((re) => re.test(contenu))) touches.push(f);
+    if (contientSecret(contenu, secrets)) touches.push(f);
   }
   return touches;
 }

@@ -10,7 +10,7 @@ import { tarifJuge, secretsCites, verifierEnv } from './configuration.mjs';
 import { ArretJuge, systemeJuge, contenuJuge, coutMaximal, creerClientJuge, juger } from './juge.mjs';
 import { ouvrirRegistre, ErreurPlafond } from './couts.mjs';
 import { verdictFinal, resumer, rapportMarkdown, neutre } from './rapport.mjs';
-import { balayer } from './secrets.mjs';
+import { balayer, contientSecret } from './secrets.mjs';
 
 async function enParallele(elements, n, f) {
   const out = new Array(elements.length);
@@ -52,7 +52,11 @@ const servie = (l) => l.echanges.some((e) => e.statut_http >= 200 && e.statut_ht
  * plafond n'est pas jugée (les suivantes, moins chères, peuvent l'être). Le juge s'arrête sur une
  * erreur de clé, de facturation ou de connexion, et après trois appels de suite sans réponse.
  */
-async function phaseJuge(lignes, j, registre, log, { apresVerdict = () => {} } = {}) {
+async function phaseJuge(lignes, j, registre, log, { apresVerdict = () => {}, secrets = [], dossier } = {}) {
+  // Contrôler les réponses brutes avant le premier envoi, même au-delà de la troncature du juge.
+  if (j && lignes.some((l) => l.echanges.some((e) => contientSecret(e.reponse || '', secrets)))) {
+    throw erreurSecret(['resultats.jsonl'], dossier);
+  }
   let arret = null;
   let reussis = 0;
   let echecsDeSuite = 0;
@@ -235,6 +239,7 @@ export async function executerPassage(config, opts, deps = {}) {
     verdicts(lignes, config, ctx);
     ecrire(dossier, 'resultats.jsonl', jsonl(lignes)); // remis dans l'ordre du corpus
     const arretJuge = await phaseJuge(lignes, j, registre, log, {
+      secrets: formesSecretes(config, env), dossier,
       apresVerdict: () => {
         verdicts(lignes, config, ctx); // le champ verdict suit chaque avis du juge
         ecrire(dossier, 'resultats.jsonl', jsonl(lignes));
@@ -308,7 +313,7 @@ export async function rejugerPassage(config, dossier, deps = {}) {
       balayerApresInterruption(dossier, config, env);
     };
     registre.avantSortie = rejugementEnCours;
-    const arretJuge = await phaseJuge(lignes, j, registre, log, { apresVerdict: ecrireEnCours });
+    const arretJuge = await phaseJuge(lignes, j, registre, log, { apresVerdict: ecrireEnCours, secrets: formesSecretes(config, env), dossier });
     verdicts(lignes, config, ctx);
     const maintenant = maintenantRejuge;
     const resume = resumer(lignes, {
