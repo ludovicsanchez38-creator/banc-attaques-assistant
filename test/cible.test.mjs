@@ -65,6 +65,80 @@ test('poser ne lève pas sur une cible injoignable', async () => {
   assert.match(r.erreur, /requête impossible/);
 });
 
+for (const [statut, format] of [[200, 'texte'], [200, 'json'], [200, 'sse'], [500, 'texte']]) {
+  test(`F-10 : poser annule un corps dépassant 1 Mio (HTTP ${statut}, ${format})`, async (t) => {
+    let emis = 0;
+    let annule = false;
+    const bloc = new TextEncoder().encode('é'.repeat(32 * 1024)); // 64 Kio, 32 768 caractères
+    const flux = new ReadableStream({
+      pull(controleur) {
+        controleur.enqueue(bloc);
+        if (++emis === 64) controleur.close();
+      },
+      cancel() { annule = true; },
+    }, { highWaterMark: 0 });
+    t.mock.method(globalThis, 'fetch', async () => new Response(flux, { status: statut }));
+    const r = await poser(cibleDe('http://127.0.0.1:1/api/chat', { reponse: { format, chemin: 'reponse' } }), {
+      question: 'x', etat: { cookies: new Map(), session: null },
+    });
+    assert.equal(annule, true, 'le corps doit être annulé avant sa lecture complète');
+    assert.equal(emis, 17, 'la lecture doit cesser au premier fragment dépassant 1 Mio en octets');
+    assert.equal(r.statut, 0, 'le dépassement est une erreur de lecture');
+    assert.equal(r.texte, '', 'aucune réponse partielle exploitable');
+    assert.match(r.erreur, /réponse trop volumineuse.*1048576 octets/);
+  });
+}
+
+test('F-10 : poser accepte exactement 1 Mio de texte UTF-8', async (t) => {
+  const texte = 'é'.repeat(512 * 1024);
+  t.mock.method(globalThis, 'fetch', async () => new Response(texte));
+  const r = await poser(cibleDe('http://127.0.0.1:1/api/chat', { reponse: { format: 'texte' } }), {
+    question: 'x', etat: { cookies: new Map(), session: null },
+  });
+  assert.equal(r.statut, 200);
+  assert.equal(r.erreur, null);
+  assert.ok(r.texte === texte, 'le texte à la limite est conservé intégralement');
+});
+
+test('F-10 : poser conserve les caractères UTF-8 répartis entre fragments', async (t) => {
+  const texte = '\uFEFFDébut 🙂 fin';
+  const octets = new TextEncoder().encode(texte);
+  let i = 0;
+  t.mock.method(globalThis, 'fetch', async () => new Response(new ReadableStream({
+    pull(controleur) {
+      if (i < octets.length) controleur.enqueue(octets.subarray(i, ++i));
+      else controleur.close();
+    },
+  }, { highWaterMark: 0 })));
+  const r = await poser(cibleDe('http://127.0.0.1:1/api/chat', { reponse: { format: 'texte' } }), {
+    question: 'x', etat: { cookies: new Map(), session: null },
+  });
+  assert.equal(r.texte, 'Début 🙂 fin', 'même décodage UTF-8 et BOM que Response.text()');
+  assert.equal(r.erreur, null);
+});
+
+test('F-10 : poser accepte une réponse sans corps', async (t) => {
+  t.mock.method(globalThis, 'fetch', async () => new Response(null, { status: 204 }));
+  const r = await poser(cibleDe('http://127.0.0.1:1/api/chat', { reponse: { format: 'texte' } }), {
+    question: 'x', etat: { cookies: new Map(), session: null },
+  });
+  assert.equal(r.statut, 204);
+  assert.equal(r.texte, '');
+  assert.equal(r.erreur, null);
+});
+
+test('F-10 : jouer arrête les tours après une réponse trop volumineuse', async (t) => {
+  let appels = 0;
+  t.mock.method(globalThis, 'fetch', async () => {
+    appels++;
+    return new Response('x'.repeat(1024 * 1024 + 1));
+  });
+  const echanges = await jouer(cibleDe('http://127.0.0.1:1/api/chat', { reponse: { format: 'texte' } }), { tours: ['un', 'deux'] });
+  assert.equal(appels, 1, 'le second tour ne doit pas être envoyé');
+  assert.equal(echanges.length, 1);
+  assert.match(echanges[0].erreur, /réponse trop volumineuse/);
+});
+
 test('mode session : cookies et identifiant de conversation renvoyés au tour suivant', async () => {
   const vus = [];
   const srv = http.createServer((req, res) => {

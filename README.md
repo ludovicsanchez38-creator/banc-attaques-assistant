@@ -112,6 +112,8 @@ Si le port 8787 ou 8788 est déjà pris, lancez la cible et le juge sur deux aut
 
 Le banc interroge un service qui accepte une requête `POST`, `PUT` ou `PATCH` au corps JSON et répond en JSON, en texte brut ou en flux SSE (événements JSON ou texte brut). La conversation peut voyager dans la requête ou rester sur le serveur (cookies, identifiant de conversation), et un attribut renvoyé avec chaque réponse (une signature, par exemple) peut être recopié au tour suivant. WebSocket, NDJSON et les requêtes `GET` restent hors de sa portée ; un widget hébergé par un éditeur (Intercom, Crisp, Tidio...) ne se teste que par l'API HTTP que cet éditeur documente. Un jeton anti-robot à usage unique (Turnstile, hCaptcha) ne se rejoue pas : désactivez-le sur la copie de recette. Enfin, H03, H06, H08 et K07 fabriquent des adresses qui imitent votre domaine : ne cliquez pas dessus.
 
+Le corps de chaque réponse de la cible est limité à 1 Mio (1 048 576 octets), y compris en cas d'erreur HTTP. Au dépassement, le banc annule le flux et signale une erreur sans exploiter de réponse partielle.
+
 ## Lire le rapport
 
 Chaque passage écrit trois fichiers dans `resultats/<date et heure UTC>-<passe>/` :

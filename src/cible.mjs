@@ -152,6 +152,25 @@ function attributsDe(cible, objets) {
   return Object.keys(out).length ? out : null;
 }
 
+const TAILLE_MAX_REPONSE_OCTETS = 1024 * 1024;
+
+/** Borne le corps réellement reçu, sans se fier à Content-Length, quel que soit le statut HTTP. */
+async function lireReponse(r) {
+  if (!r.body) return '';
+  const decodeur = new TextDecoder();
+  let taille = 0;
+  let brut = '';
+  for await (const bloc of r.body) {
+    taille += bloc.byteLength;
+    if (taille > TAILLE_MAX_REPONSE_OCTETS) {
+      // Quitter l'itérateur annule le flux et libère son lecteur, sans garder de réponse partielle.
+      throw new Error(`réponse trop volumineuse : plafond de ${TAILLE_MAX_REPONSE_OCTETS} octets dépassé`);
+    }
+    brut += decodeur.decode(bloc, { stream: true });
+  }
+  return brut + decodeur.decode();
+}
+
 /** Envoie une question. Ne lève jamais : une panne réseau devient un statut 0 avec une erreur. */
 export async function poser(cible, { question, historique = [], etat, env = process.env }) {
   if (cible.delai_entre_requetes_ms > 0) await attendre(cible.delai_entre_requetes_ms);
@@ -165,7 +184,7 @@ export async function poser(cible, { question, historique = [], etat, env = proc
       signal: AbortSignal.timeout(cible.delai_max_ms),
       redirect: 'manual',
     });
-    brut = await r.text();
+    brut = await lireReponse(r);
   } catch (e) {
     const code = e?.cause?.code || e?.name || '';
     const clair = {
